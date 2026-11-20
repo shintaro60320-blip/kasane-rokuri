@@ -3,7 +3,7 @@
 // 押す＝選ぶ／長押しして動かす＝フレーズを動かす／目盛りを長押ししてなぞる＝範囲を選ぶ／2本指でつまむ＝拡大・縮小
 
 import { h, fmtTime } from './ui-sheets.js';
-import { activeTake, clipEnd, projectEnd, snapToBeat, MIN_CLIP } from './model.js';
+import { activeTake, clipEnd, projectEnd, snapToBeat, freeStart, trimBounds, MIN_CLIP } from './model.js';
 import { peaksForRange } from './peaks.js';
 
 const LONG_PRESS = 380;
@@ -514,8 +514,6 @@ export class Timeline {
     const p = this.app.project;
     const snap = (t) => (p.snap ? snapToBeat(t, p.bpm) : t);
     if (g.type === 'move') {
-      g.start = Math.max(0, snap(g.clip.start + dx));
-      g.el.style.left = `${g.start * this.pps}px`;
       for (const [tid, row] of this.rowEls) {
         const rr = row.getBoundingClientRect();
         if (e.clientY >= rr.top && e.clientY < rr.bottom) {
@@ -526,12 +524,15 @@ export class Timeline {
           break;
         }
       }
+      // 隣のフレーズには重ねない（端で止まる）
+      g.start = freeStart(p, g.clip.id, Math.max(0, snap(g.clip.start + dx)), g.trackId);
+      g.el.style.left = `${g.start * this.pps}px`;
     } else if (g.type === 'trim') {
       const c = g.clip;
       const minOff = Math.min(...c.takes.map((t) => t.offset));
       if (g.side === 'l') {
         let ns = snap(c.start + dx);
-        ns = Math.max(ns, c.start - minOff, 0);
+        ns = Math.max(ns, c.start - minOff, 0, trimBounds(p, c.id).minStart);
         ns = Math.min(ns, clipEnd(c) - MIN_CLIP);
         g.value = ns;
         g.el.style.left = `${ns * this.pps}px`;
@@ -540,7 +541,7 @@ export class Timeline {
         const audio = this.app.audios.get(activeTake(c).audioId);
         const maxEnd = audio ? c.start + audio.pcm.length / audio.sampleRate - c.offset : Infinity;
         let ne = snap(clipEnd(c) + dx);
-        ne = Math.min(Math.max(ne, c.start + MIN_CLIP), maxEnd);
+        ne = Math.min(Math.max(ne, c.start + MIN_CLIP), maxEnd, trimBounds(p, c.id).maxEnd);
         g.value = ne;
         g.el.style.width = `${(ne - c.start) * this.pps}px`;
       }

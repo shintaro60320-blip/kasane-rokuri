@@ -359,11 +359,56 @@ export function splitClip(p, clipId, t) {
   return { project: q, ok: true, leftId: c.id, rightId: R.id };
 }
 
-/** 頭を newStart へ（縮める・伸ばす）。録音の頭より前や、0秒より前には伸ばせない */
+/**
+ * フレーズを動かす・伸ばすときは、同じトラックのほかのフレーズを削らない（隣の端で止まる）。
+ * freeStart：trackId のトラックで、長さ dur のフレーズを want 秒に置きたいとき、
+ * ほかのフレーズに重ならない一番近い位置を返す。min より前には置かない。
+ */
+export function freeStart(p, clipId, want, trackId, { min = 0 } = {}) {
+  const c = p.clips.find((x) => x.id === clipId);
+  if (!c) return Math.max(min, want);
+  const dur = c.duration;
+  const tid = trackId || c.trackId;
+  const others = p.clips.filter((o) => o.id !== clipId && o.trackId === tid).sort((a, b) => a.start - b.start);
+  want = Math.max(min, want);
+  let best = null;
+  let a = min;
+  const tryGap = (lo, hi) => {
+    if (hi - lo < dur - 1e-7) return;
+    const s = Math.min(Math.max(want, lo), Math.max(lo, hi - dur));
+    if (best === null || Math.abs(s - want) < Math.abs(best - want) - 1e-9) best = s;
+  };
+  for (const o of others) {
+    const oe = clipEnd(o);
+    if (oe <= a + TOL) continue;
+    tryGap(a, o.start);
+    a = Math.max(a, oe);
+  }
+  tryGap(a, Infinity);
+  return best === null ? a : best;
+}
+
+/** 縮める・伸ばすときに動かせる範囲（隣のフレーズの端まで）。minStart＝頭の下限、maxEnd＝終わりの上限 */
+export function trimBounds(p, clipId) {
+  const c = p.clips.find((x) => x.id === clipId);
+  let minStart = 0;
+  let maxEnd = Infinity;
+  if (!c) return { minStart, maxEnd };
+  const mid = c.start + c.duration / 2;
+  for (const o of p.clips) {
+    if (o.id === clipId || o.trackId !== c.trackId) continue;
+    const oe = clipEnd(o);
+    if (o.start + o.duration / 2 <= mid) minStart = Math.max(minStart, Math.min(oe, c.start));
+    else maxEnd = Math.min(maxEnd, Math.max(o.start, clipEnd(c)));
+  }
+  return { minStart, maxEnd };
+}
+
+/** 頭を newStart へ（縮める・伸ばす）。録音の頭より前や、0秒より前、隣のフレーズの中には伸ばせない */
 export function trimStart(p, clipId, newStart) {
   const q = clone(p);
   const c = findClip(q, clipId);
-  let delta = newStart - c.start;
+  let delta = Math.max(newStart, trimBounds(q, clipId).minStart) - c.start;
   delta = Math.max(delta, -c.offset, -c.start); // 今のテイクの録音がある所まで
   delta = Math.min(delta, c.duration - MIN_CLIP);
   shiftHead(c, delta);
@@ -378,7 +423,7 @@ export function trimStart(p, clipId, newStart) {
 export function trimEnd(p, clipId, newEnd, audioSec = Infinity) {
   const q = clone(p);
   const c = findClip(q, clipId);
-  let d = newEnd - c.start;
+  let d = Math.min(newEnd, trimBounds(q, clipId).maxEnd) - c.start;
   d = Math.min(d, audioSec - c.offset);
   d = Math.max(d, MIN_CLIP);
   const longer = d > c.duration + TOL;
@@ -393,9 +438,11 @@ export function trimEnd(p, clipId, newEnd, audioSec = Infinity) {
 export function moveClip(p, clipId, { start, trackId }) {
   const q = clone(p);
   const c = findClip(q, clipId);
-  if (typeof start === 'number' && Number.isFinite(start)) c.start = Math.max(0, start);
-  if (trackId && q.tracks.some((t) => t.id === trackId)) c.trackId = trackId;
-  resolveOverlapsMut(q, c.id, 0);
+  // 隣のフレーズは削らない。重なる所へ置こうとしたら、重ならない一番近い位置に置く
+  const tid = trackId && q.tracks.some((t) => t.id === trackId) ? trackId : c.trackId;
+  const want = typeof start === 'number' && Number.isFinite(start) ? Math.max(0, start) : c.start;
+  c.start = freeStart(q, c.id, want, tid);
+  c.trackId = tid;
   return q;
 }
 
@@ -410,9 +457,8 @@ export function duplicateClip(p, clipId) {
   const c = findClip(q, clipId);
   const d = clone(c);
   d.id = newId('c');
-  d.start = clipEnd(c);
   q.clips.push(d);
-  resolveOverlapsMut(q, d.id, 0);
+  d.start = freeStart(q, d.id, clipEnd(c), c.trackId, { min: clipEnd(c) }); // 後ろのフレーズを削らず、空いている所へ
   return { project: q, clipId: d.id };
 }
 
