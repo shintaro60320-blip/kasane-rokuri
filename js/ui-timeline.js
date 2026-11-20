@@ -1,7 +1,8 @@
 // ui-timeline.js — トラックと波形の画面、指の操作。
+// はさみが入のとき：フレーズの上で指を動かして離す＝そこで切る
 // 押す＝選ぶ／長押しして動かす＝フレーズを動かす／目盛りを長押ししてなぞる＝範囲を選ぶ／2本指でつまむ＝拡大・縮小
 
-import { h } from './ui-sheets.js';
+import { h, fmtTime } from './ui-sheets.js';
 import { activeTake, clipEnd, projectEnd, snapToBeat, MIN_CLIP } from './model.js';
 import { peaksForRange } from './peaks.js';
 
@@ -415,6 +416,17 @@ export class Timeline {
     }
     if (t.closest('.take-badge') || t.closest('button')) return;
     const clipEl = t.closest('.clip');
+    if (clipEl && !clipEl.classList.contains('recording') && this.app.cutMode) {
+      const c = this.app.project.clips.find((x) => x.id === clipEl.dataset.clip);
+      if (!c) return;
+      const line = h('div', { class: 'cut-line' }, h('b', { text: '' }));
+      clipEl.append(line);
+      this.g = { ...base, type: 'cut', clip: structuredClone(c), el: clipEl, line, active: true };
+      this.capture(e);
+      e.preventDefault();
+      this.placeCut(e);
+      return;
+    }
     if (clipEl && !clipEl.classList.contains('recording')) {
       this.g = { ...base, type: 'clip', clipId: clipEl.dataset.clip, el: clipEl };
       this.g.timer = setTimeout(() => this.activate(), LONG_PRESS);
@@ -455,6 +467,33 @@ export class Timeline {
     }
   }
 
+  /** はさみの線を指の位置に置く。指が上下に大きく外れたら「やめる」（離しても切らない） */
+  placeCut(e) {
+    const g = this.g;
+    const c = g.clip;
+    const p = this.app.project;
+    const end = clipEnd(c);
+    let t = this.timeAt(e.clientX);
+    if (p.snap) t = snapToBeat(t, p.bpm);
+    // 再生位置（白い線）の近くでは、そこに吸い付く（聞いて止めた所で切れるように）
+    const ph = this.app.currentPos();
+    if (Math.abs(t - ph) * this.pps < 10) t = ph;
+    // 端ぎりぎりで離しても、見えないほど短いかけらができないようにする
+    const edge = Math.max(MIN_CLIP * 1.01, 0.05);
+    const lo = c.start + edge;
+    const hi = end - edge;
+    const r = g.el.getBoundingClientRect();
+    const away = e.clientY < r.top - 56 || e.clientY > r.bottom + 56;
+    g.ok = !away && hi > lo;
+    t = Math.min(Math.max(t, lo), Math.max(lo, hi));
+    g.t = t;
+    const x = (t - c.start) * this.pps;
+    g.line.style.left = `${x}px`;
+    g.line.classList.toggle('off', !g.ok);
+    g.line.classList.toggle('at-edge', x < 40);
+    g.line.firstChild.textContent = g.ok ? fmtTime(t, 2) : 'やめる';
+  }
+
   autoscroll(x) {
     const r = this.el.getBoundingClientRect();
     if (x > r.right - 32) this.el.scrollLeft += 10;
@@ -470,6 +509,7 @@ export class Timeline {
     }
     e.preventDefault();
     this.autoscroll(e.clientX);
+    if (g.type === 'cut') { this.placeCut(e); return; }
     const dx = (e.clientX - g.x0 + (this.el.scrollLeft - g.sl0)) / this.pps;
     const p = this.app.project;
     const snap = (t) => (p.snap ? snapToBeat(t, p.bpm) : t);
@@ -523,6 +563,11 @@ export class Timeline {
       else if (g.type === 'ruler' || g.type === 'lane') {
         this.app.tapTime(this.timeAt(e.clientX), g.type === 'lane');
       }
+      return;
+    }
+    if (g.type === 'cut') {
+      g.line.remove();
+      if (g.ok) this.app.cutClipAt(g.clip.id, g.t);
       return;
     }
     if (g.type === 'move') {

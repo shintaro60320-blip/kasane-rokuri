@@ -14,7 +14,7 @@ import {
   closeSheet, currentSheet, refreshSheet, dialog, confirmDialog, promptDialog, toast, fmtTime,
 } from './ui-sheets.js';
 
-export const VERSION = 'v1.1.0';
+export const VERSION = 'v1.2.0';
 const MAX_REC_SEC = 600;
 const PENDING_FLUSH_MS = 2000;          // 録音中、断片を保存する間隔
 const WAIT_MSG = '保存が終わるまでお待ちください';
@@ -37,6 +37,7 @@ class App {
     this.selectedClipId = null;
     this.recTrackId = null;
     this.isRecording = false;
+    this.cutMode = false;
     /** 録音の準備〜録音〜停止〜保存完了までの「作業中」。この間は曲の切り替えや次の録音をしない */
     this.session = null;
     this.liveBase = null;
@@ -237,6 +238,8 @@ class App {
     $('btnRec').addEventListener('click', () => this.toggleRecord());
     $('btnHome').addEventListener('click', () => this.goHome());
     $('btnMixer').addEventListener('click', () => { this.engine.ensure().catch(() => {}); openMixerSheet(this); });
+    $('btnCut').addEventListener('click', () => this.setCutMode(!this.cutMode));
+    $('btnCutDone').addEventListener('click', () => this.setCutMode(false));
     $('btnUndo').addEventListener('click', () => this.undo());
     $('btnRedo').addEventListener('click', () => this.redo());
     $('btnSongs').addEventListener('click', () => { if (this.guardBusy()) return; this.flushSave(); openSongsSheet(this); });
@@ -630,6 +633,7 @@ class App {
       st.meta = { projectId: p.id, trackId, mode, recordStart, range, transportFrom: st.rec.transportFrom, T0: st.rec.T0, sampleRate: st.rec.sampleRate, latencySec, createdAt: Date.now() };
       this.flushPending(st);
       st.flushTimer = setInterval(() => this.flushPending(st), PENDING_FLUSH_MS);
+      this.setCutMode(false);
       this.isRecording = true;
       this.session.phase = 'recording';
       const track = p.tracks.find((t) => t.id === trackId);
@@ -982,7 +986,7 @@ class App {
 
   // ---------- フレーズ ----------
   tapClip(id) {
-    if (this.isRecording) return;
+    if (this.isRecording || this.cutMode) return;
     this.selectedClipId = id;
     this.render();
     openClipSheet(this, id);
@@ -1024,6 +1028,33 @@ class App {
     const r = M.splitClip(this.project, id, t);
     if (!r.ok) { toast('再生位置をフレーズの中に合わせてから押してください'); return; }
     this.commit(r.project);
+  }
+
+  /** はさみ：入にすると、フレーズの上で指を離した所で切れる */
+  setCutMode(on) {
+    on = !!on;
+    if (on) {
+      if (this.isRecording) { toast('録音中は切れません'); return; }
+      if (!this.project.clips.length) { toast('切るフレーズがまだありません'); return; }
+      closeSheet();
+      this.selectedClipId = null;
+    }
+    if (on === this.cutMode) return;
+    this.cutMode = on;
+    $('btnCut').setAttribute('aria-pressed', String(on));
+    $('cutHint').hidden = !on;
+    document.body.classList.toggle('cutting', on);
+    this.render();
+  }
+
+  /** はさみで、フレーズ id を曲の t 秒の所で2つに分ける */
+  cutClipAt(id, t) {
+    if (!this.project.clips.some((c) => c.id === id)) return false;
+    const r = M.splitClip(this.project, id, t);
+    if (!r.ok) { toast('端に近すぎて切れません。もう少し内側で離してください'); return false; }
+    if (!this.commit(r.project)) return false;
+    toast('切りました', { action: { label: '取り消す', run: () => this.undo() } });
+    return true;
   }
 
   duplicateClip(id) {

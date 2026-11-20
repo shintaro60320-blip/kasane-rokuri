@@ -405,7 +405,7 @@ svg { display: block; }
 .transport {
   flex: none;
   display: grid;
-  grid-template-columns: 1fr 1fr 1.2fr 1fr;
+  grid-template-columns: 1fr 1fr 1.2fr 1fr 1fr;
   align-items: center;
   justify-items: center;
   padding: 6px 8px calc(8px + var(--safe-b));
@@ -678,3 +678,51 @@ input[type="range"]::-moz-range-thumb { width: 26px; height: 26px; border-radius
   .sheet.enter { transform: translateX(-50%) translateY(100%); }
   .sheet.docked.enter { transform: translateX(-50%) translateY(24px); }
 }
+
+/* ---------- はさみ（切る） ---------- */
+.t-btn.wide[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.t-btn.wide[aria-pressed="true"] svg { color: var(--accent-ink); }
+.cut-hint {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 12px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--accent);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.cut-hint[hidden] { display: none; }
+.cut-hint span { flex: 1; min-width: 0; }
+.cut-hint .btn { flex: none; min-height: 40px; }
+body.cutting .clip { touch-action: none; cursor: col-resize; }
+.cut-line {
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  width: 2px;
+  margin-left: -1px;
+  background: #ffd24a;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.55);
+  pointer-events: none;
+  z-index: 6;
+}
+.cut-line b {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #ffd24a;
+  color: #1a1400;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cut-line.at-edge b { transform: none; left: 0; }
+.cut-line.off { background: var(--sub); opacity: .6; }
+.cut-line.off b { background: var(--sub); color: var(--bg, #0e1014); }

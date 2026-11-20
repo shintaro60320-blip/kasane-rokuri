@@ -38,6 +38,11 @@
 
   <main id="timeline" class="timeline" aria-label="トラックとフレーズ"></main>
 
+  <div id="cutHint" class="cut-hint" hidden>
+    <span>切りたい所に指を置いて、左右に動かし、離すと切れます。</span>
+    <button id="btnCutDone" class="btn" type="button">おわる</button>
+  </div>
+
   <div class="statusbar">
     <div id="meter" class="meter" hidden><div class="meter-bar"></div></div>
     <span id="timeText" class="time" aria-live="off">0:00.0</span>
@@ -68,6 +73,10 @@
     <button id="btnRec" class="rec-btn" type="button" aria-label="録音">
       <span class="rec-dot"></span>
       <span id="recMode" class="rec-mode" hidden>範囲</span>
+    </button>
+    <button id="btnCut" class="t-btn wide" type="button" aria-pressed="false" aria-label="はさみ（フレーズを切る）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.2 8.2 20 20M8.2 15.8 20 4"/></svg>
+      <span>はさみ</span>
     </button>
     <button id="btnMixer" class="t-btn wide" type="button" aria-label="ミキサー（音量）">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 4v16M12 4v16M18 4v16"/><rect x="3.5" y="13" width="5" height="3" rx="1" fill="currentColor"/><rect x="9.5" y="7" width="5" height="3" rx="1" fill="currentColor"/><rect x="15.5" y="15" width="5" height="3" rx="1" fill="currentColor"/></svg>
