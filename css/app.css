@@ -559,9 +559,9 @@ input[type="range"] {
   touch-action: none;
 }
 input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: var(--line-2); }
-input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 26px; height: 26px; margin-top: -10px; border-radius: 50%; background: var(--text); border: 0; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; box-sizing: border-box; width: 44px; height: 44px; margin-top: -19px; border-radius: 50%; background: var(--text); background-clip: padding-box; border: 9px solid transparent; pointer-events: auto; cursor: grab; }
 input[type="range"]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--line-2); }
-input[type="range"]::-moz-range-thumb { width: 26px; height: 26px; border-radius: 50%; background: var(--text); border: 0; }
+input[type="range"]::-moz-range-thumb { box-sizing: border-box; width: 44px; height: 44px; border-radius: 50%; background: var(--text); background-clip: padding-box; border: 9px solid transparent; pointer-events: auto; cursor: grab; }
 
 .text-input {
   width: 100%;
@@ -726,3 +726,7 @@ body.cutting .clip { touch-action: none; cursor: col-resize; }
 .cut-line.at-edge b { transform: none; left: 0; }
 .cut-line.off { background: var(--sub); opacity: .6; }
 .cut-line.off b { background: var(--sub); color: var(--bg, #0e1014); }
+
+/* スライダーは、丸いつまみに触れたときだけ動く（線の部分に触れても動かない＝縦にスクロールする指で値が変わらない）。
+   つまみの見た目は 26px、触れる範囲は 44px。キーボードでの操作はそのまま使える。 */
+input[type="range"] { pointer-events: none; touch-action: pan-y; }

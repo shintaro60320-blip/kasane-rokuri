@@ -10,7 +10,7 @@
 //
 // 版を上げるとき：このファイルの VERSION と js/main.js の VERSION を同じ値に変える。
 
-const VERSION = 'v1.3.0';
+const VERSION = 'v1.5.0';
 const CACHE = `kasane-app-${VERSION}`;
 const FILES = [
   './',

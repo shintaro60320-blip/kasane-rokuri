@@ -14,7 +14,7 @@ import {
   closeSheet, currentSheet, refreshSheet, dialog, confirmDialog, promptDialog, toast, fmtTime,
 } from './ui-sheets.js';
 
-export const VERSION = 'v1.3.0';
+export const VERSION = 'v1.5.0';
 const MAX_REC_SEC = 600;
 const PENDING_FLUSH_MS = 2000;          // 録音中、断片を保存する間隔
 const WAIT_MSG = '保存が終わるまでお待ちください';
@@ -344,6 +344,7 @@ class App {
     const tick = () => {
       const pos = this.currentPos();
       if (this.engine.playing) this.timeline.setPlayhead(pos, true);
+      this.syncWakeLock();
       if (this.isRecording && this.recState) this.drawRecording();
       $('timeText').textContent = fmtTime(pos);
       requestAnimationFrame(tick);
@@ -871,12 +872,50 @@ class App {
     dialog({ title: '録音を始められませんでした', message: msg });
   }
 
-  async requestWakeLock() {
-    try { if (navigator.wakeLock) this.wakeLock = await navigator.wakeLock.request('screen'); } catch { /* 使えない端末もある */ }
+  /** 画面を点けたままにする必要があるか（録音中・録音の準備中・再生中・テイクの試し聞き中） */
+  wakeNeeded() {
+    return !!(this.isRecording || this.engine.playing || this.previewing || (this.session && this.session.phase === 'starting'));
   }
 
+  /**
+   * 再生中・録音中は画面が自動で消えないようにする（消えると録音が止まるため）。
+   * 毎フレーム呼ばれる：必要な間は持ち続け、端末に外されたら取り直し、要らなくなったら返す。
+   */
+  syncWakeLock() {
+    const need = this.wakeNeeded();
+    if (!need) { if (this.wakeLock) this.releaseWakeLock(); return; }
+    if (this.wakeLock || this.wakePending || document.hidden) return;
+    if (!navigator.wakeLock) { this.warnNoWakeLock(); return; }
+    const now = Date.now();
+    if (this.wakeRetryAt && now < this.wakeRetryAt) return;
+    this.wakePending = true;
+    navigator.wakeLock.request('screen').then((lock) => {
+      this.wakePending = false;
+      this.wakeFails = 0;
+      if (!this.wakeNeeded()) { lock.release().catch(() => {}); return; }
+      this.wakeLock = lock;
+      // 端末の都合で外されたら（画面を離れた・省電力など）、次のフレームで取り直す
+      lock.addEventListener('release', () => { if (this.wakeLock === lock) this.wakeLock = null; });
+    }).catch(() => {
+      this.wakePending = false;
+      this.wakeFails = (this.wakeFails || 0) + 1;
+      this.wakeRetryAt = Date.now() + 2000;
+      if (this.wakeFails >= 2) this.warnNoWakeLock();
+    });
+  }
+
+  warnNoWakeLock() {
+    if (this.wakeWarned) return;
+    this.wakeWarned = true;
+    toast('この端末では、画面を点けたままにできませんでした。長く録るときは、端末の設定で「自動ロック」を長めにしてください', { duration: 9000 });
+  }
+
+  requestWakeLock() { this.syncWakeLock(); }
+
   releaseWakeLock() {
-    if (this.wakeLock) { this.wakeLock.release().catch(() => {}); this.wakeLock = null; }
+    const lock = this.wakeLock;
+    this.wakeLock = null;
+    if (lock) lock.release().catch(() => {});
   }
 
   // ---------- 前回の録音を戻す ----------
