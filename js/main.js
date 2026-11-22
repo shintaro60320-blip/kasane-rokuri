@@ -7,6 +7,7 @@ import { Engine } from './engine.js';
 import { Timeline } from './ui-timeline.js';
 import { computePeaks, PeakBuilder } from './peaks.js';
 import { mixProject } from './mix.js';
+import { findLag, envelopeOf } from './align.js';
 import { encodeWav16 } from './wav.js';
 import { packBackup, unpackBackup } from './backup.js';
 import {
@@ -14,7 +15,7 @@ import {
   closeSheet, currentSheet, refreshSheet, dialog, confirmDialog, promptDialog, toast, fmtTime,
 } from './ui-sheets.js';
 
-export const VERSION = 'v1.7.0';
+export const VERSION = 'v1.8.0';
 const MAX_REC_SEC = 600;
 const PENDING_FLUSH_MS = 2000;          // 録音中、断片を保存する間隔
 const WAIT_MSG = '保存が終わるまでお待ちください';
@@ -785,9 +786,8 @@ class App {
       else if (reason === 'hidden') toast('画面を離れたので、録音を止めて保存しました');
       else if (res.mode === 'punch') toast(r.addedTake ? '新しいテイクを足しました' : '範囲を録り直しました', { action: { label: '取り消す', run: () => this.undo() } });
       else if (sameProject && this.project.clips.some((c) => c.trackId !== res.trackId)) {
-        // 重ねて録ったとき：ずれていたら、その場で聞きながら合わせられるようにする
-        const id = r.clipId;
-        toast('重ねて録りました。ずれて聞こえたら合わせられます', { action: { label: 'ずれを合わせる', run: () => this.openSync(id) }, duration: 8000 });
+        // 重ねて録ったとき：ずれを探して、見つかれば「合わせる」を出す
+        this.offerAutoAlign(r.clipId);
       }
       return r.clipId;
     } catch (e) {
@@ -1054,7 +1054,71 @@ class App {
 
   beginSync(clipId) {
     if (this.liveBase) this.commitLive();
-    this.syncState = { clipId, shift: 0, applyNext: true };
+    this.syncState = { clipId, shift: 0, applyNext: true, viewFrom: null };
+  }
+
+  /** 合わせる画面の絵：ほかのトラック（ref）とこのフレーズ（x）の波形。窓は開いた時の位置で止めておく（動いたのが見えるように） */
+  syncWaves(widthPx, pxSec) {
+    const st = this.syncState;
+    const c = st && this.project.clips.find((x) => x.id === st.clipId);
+    if (!c) return null;
+    if (st.viewFrom == null) {
+      // フレーズの最初の大きな音の少し前から見せる（頭の無音だけが映らないように）
+      const env = envelopeOf(this.project, this.audios, { from: c.start, to: c.start + Math.min(c.duration, 30), hop: 0.01, include: (x) => x.id === c.id, mode: 'peak' });
+      let mx = 0;
+      for (const v of env) mx = Math.max(mx, v);
+      let i = 0;
+      while (i < env.length && env[i] < mx * 0.3) i++;
+      st.viewFrom = Math.max(0, c.start + i * 0.01 - 0.25);
+    }
+    const from = st.viewFrom;
+    const to = from + widthPx * pxSec;
+    const opt = { from, to, hop: pxSec, mode: 'peak' };
+    return {
+      from,
+      ref: envelopeOf(this.project, this.audios, { ...opt, include: (x) => x.trackId !== c.trackId && x.id !== c.id }),
+      x: envelopeOf(this.project, this.audios, { ...opt, include: (x) => x.id === c.id }),
+      color: (this.project.tracks.find((t) => t.id === c.trackId) || {}).color,
+    };
+  }
+
+  /** 合わせる画面の「自動で合わせる」：見つけた分だけ動かして流す */
+  syncAuto() {
+    const st = this.syncState;
+    if (!st) return { ok: false };
+    const f = findLag(this.project, this.audios, st.clipId);
+    if (!f.ok) return f;
+    if (Math.abs(f.lagSec) >= 0.001) this.syncNudge(-f.lagSec);
+    return f;
+  }
+
+  /** 重ねて録った直後：ずれを探して、見つかれば「合わせますか」を出す */
+  offerAutoAlign(clipId) {
+    let f;
+    try { f = findLag(this.project, this.audios, clipId); } catch { f = { ok: false }; }
+    if (f.ok && Math.abs(f.lagSec) >= 0.008) {
+      const ms = Math.round(Math.abs(f.lagSec) * 1000);
+      toast(`重ねた音が ${ms}ms ${f.lagSec > 0 ? '遅れて' : '早く'}入っていました`, { action: { label: '合わせる', run: () => this.applyAutoAlign(clipId) }, duration: 10000 });
+    } else if (f.ok) {
+      toast('重ねて録りました（ずれはほとんどありません）');
+    } else {
+      toast('重ねて録りました。ずれて聞こえたら合わせられます', { action: { label: 'ずれを合わせる', run: () => this.openSync(clipId) }, duration: 8000 });
+    }
+  }
+
+  /** 見つけたずれの分だけフレーズを動かす。大きくずれていたら、次からの録音も同じだけ合わせる */
+  applyAutoAlign(clipId) {
+    if (this.session) { this.guardBusy(); return; }
+    const f = findLag(this.project, this.audios, clipId);
+    if (!f.ok) { this.openSync(clipId); return; }
+    const prevLatency = this.settings.latencyMs;
+    if (!this.commit(M.slipClip(this.project, clipId, -f.lagSec, this.audioSecOf))) return;
+    let msg = '合わせました';
+    if (Math.abs(f.lagSec) >= 0.03) {
+      this.setSetting('latencyMs', prevLatency + f.lagSec * 1000);
+      msg = '合わせました。次からの録音も、同じだけ合わせて置きます';
+    }
+    toast(msg, { action: { label: '取り消す', run: () => { this.undo(); this.setSetting('latencyMs', prevLatency); } }, duration: 7000 });
   }
 
   /** フレーズを d 秒動かして（取り消しにはまだ積まない）、少し前から流す */
@@ -1063,9 +1127,10 @@ class App {
     if (!st || this.session) return;
     const c = this.project.clips.find((x) => x.id === st.clipId);
     if (!c) return;
-    const next = M.nudgeClip(this.project, st.clipId, d);
+    // 枠はそのままで中の音をずらす（曲の頭にあるフレーズも前へ合わせられる）
+    const next = M.slipClip(this.project, st.clipId, d, this.audioSecOf);
     const moved = next.clips.find((x) => x.id === st.clipId);
-    st.shift += moved.start - c.start;
+    st.shift += M.contentStart(moved) - M.contentStart(c);
     this.live(next);
     this.render();
     this.syncListen(true);

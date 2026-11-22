@@ -404,6 +404,67 @@ export function openTrackListSheet(app) {
   });
 }
 
+/** 前に録った音（灰色）とこのフレーズ（色つき）を重ねて描き、色つきを指で左右に動かせる絵 */
+function syncCompare(app, s) {
+  const PX_SEC = 0.004; // 1px＝4ms
+  const H = 120;
+  const cv = h('canvas', { class: 'sync-canvas', 'aria-label': '波形を重ねた絵（指で左右に動かすと、このフレーズがずれます）' });
+  const wrap = h('div', { class: 'sync-wrap' }, cv);
+  let data = null;
+  let dragPx = 0;
+  const draw = () => {
+    const w = Math.max(200, Math.round(wrap.clientWidth || 320));
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (!data || data.w !== w) { data = app.syncWaves(w, PX_SEC); if (data) data.w = w; }
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(H * dpr);
+    cv.style.height = `${H}px`;
+    const ctx = cv.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, H);
+    if (!data) return;
+    const mid = H / 2;
+    // 上と下は、それぞれの一番大きい所で高さをそろえる（声の大きさが違っても見比べやすいように）
+    let mr = 1e-6;
+    let mxx = 1e-6;
+    for (const v of data.ref) mr = Math.max(mr, v);
+    for (const v of data.x) mxx = Math.max(mxx, v);
+    // 上半分＝前に録った音（上へ伸びる）、下半分＝このフレーズ（下へ伸びる）。山の頭が縦にそろえば合っている
+    const ampR = (H / 2 - 4) / mr;
+    const ampX = (H / 2 - 4) / mxx;
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    for (let t = Math.ceil(data.from * 10) / 10; t < data.from + w * PX_SEC; t += 0.1) ctx.fillRect(Math.round((t - data.from) / PX_SEC), 0, 1, H);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.fillRect(0, mid, w, 1);
+    ctx.fillStyle = 'rgba(200,205,215,0.7)';
+    for (let i = 0; i < data.ref.length; i++) { const v = data.ref[i] * ampR; ctx.fillRect(i, mid - v, 1, Math.max(1, v)); }
+    ctx.fillStyle = hexA(data.color || '#4cc2a0', 0.9);
+    const off = Math.round(dragPx);
+    for (let i = 0; i < data.x.length; i++) { const v = data.x[i] * ampX; const xx = i + off; if (xx >= 0 && xx < w) ctx.fillRect(xx, mid + 1, 1, Math.max(1, v)); }
+  };
+  let g = null;
+  cv.addEventListener('pointerdown', (e) => { g = { id: e.pointerId, x0: e.clientX }; try { cv.setPointerCapture(e.pointerId); } catch { /* */ } e.preventDefault(); });
+  cv.addEventListener('pointermove', (e) => { if (!g || e.pointerId !== g.id) return; dragPx = e.clientX - g.x0; draw(); });
+  const end = (e) => {
+    if (!g || e.pointerId !== g.id) return;
+    g = null;
+    const d = dragPx * PX_SEC;
+    dragPx = 0;
+    if (Math.abs(d) >= 0.001) { app.syncNudge(d); s.refresh(); } else draw();
+  };
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+  requestAnimationFrame(draw);
+  return wrap;
+}
+
+function hexA(hex, a) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return `rgba(76,194,160,${a})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
 /**
  * 重ねた音を合わせるシート。押すたびにフレーズを少し動かし、少し前から流して聞かせる。
  * 動かした量は「次の録音から」の補正にも足せる（同じ端末・同じイヤホンなら、次からは合った位置に入る）。
@@ -434,9 +495,18 @@ export function openSyncSheet(app, clipId) {
         measure.disabled = false;
         result.textContent = r.ok ? `測れました。次の録音から ${Math.round(r.correctionMs)} ms で合わせます。` : r.reason;
       } });
+      const auto = button('自動で合わせる', { cls: 'primary', onClick: () => {
+        const r = app.syncAuto();
+        s.refresh();
+        const msg = s.body.querySelector('.sync-auto-msg');
+        if (msg) msg.textContent = r.ok ? (Math.abs(r.lagSec) < 0.001 ? 'もう合っています。' : `${Math.round(Math.abs(r.lagSec) * 1000)}ms ${r.lagSec > 0 ? '前へ' : '後ろへ'}動かしました。聞いて確かめてください。`) : 'はっきりした所が見つかりませんでした。下の波形を指で動かして合わせてください。';
+      } });
       body.append(
         h('div', { class: 'group' },
-          h('p', { class: 'note', text: '重ねた音が遅れて聞こえるなら「前へ」、早く聞こえるなら「後ろへ」を押します。押すたびに、少し前から流して聞かせます。数字の単位は ms（1000分の1秒）です。' }),
+          h('div', { class: 'row' }, auto),
+          h('p', { class: 'note sync-auto-msg', 'aria-live': 'polite' }),
+          syncCompare(app, s),
+          h('p', { class: 'note', text: '上の灰色＝前に録った音、下の色つき＝このフレーズ。絵を指で左右に動かして、上と下の山の始まりを縦にそろえます。' }),
           h('p', { class: 'sync-now', text: now }),
           h('div', { class: 'row nowrap' }, step(-0.02), step(-0.005), step(0.005), step(0.02)),
           h('div', { class: 'row', style: { marginTop: '10px' } }, listen),
@@ -677,7 +747,7 @@ export function openHelpSheet() {
       const items = [
         ['録る', '赤い丸を押すと録音が始まります。もう一度押すと止まり、録った音が「フレーズ」として置かれます。保存は自動です。'],
         ['重ねる（ハモリ）', '「トラックを足す」を押してから赤い丸を押します。前の音を聞きながら録れます。イヤホンを付けると、前の音が録音に入りません。'],
-        ['重ねた音のずれを合わせる', '重ねて録ると「ずれを合わせる」が出ます。押すと、「前へ」「後ろへ」でフレーズを少しずつ動かしながら、少し前から聞けます。「これで決める」を押すと、次からの録音も同じだけ合わせて置きます。あとからでも、フレーズを押して「聞きながら合わせる」で開けます。'],
+        ['重ねた音のずれを合わせる', '重ねて録ると、アプリがずれを探して「◯ms 遅れて入っていました」と出します。「合わせる」を押すだけで合い、次からの録音も合った位置に入ります。自分で直すときは、フレーズを押して「聞きながら合わせる」。上下に並んだ波形を指で動かして、山の始まりをそろえます。'],
         ['再生位置を動かす', '上の目盛りを押すと、そこへ飛びます。目盛りを横になぞると、時間を送れます。三角の印をつまんで動かすと、離した所へ行きます。左上の「はじめ」を押すと曲の頭に戻ります。'],
         ['トラックを消す', 'トラックの下の「トラックを消す」を押して、消したいトラックの「削除」を押します。間違えたら取り消しで戻せます。'],
         ['一部分だけ録り直す', '上の目盛りを長押ししたまま横になぞると、範囲が選べます。その状態で赤い丸を押すと、範囲の少し前から再生が始まり、範囲の中だけが録り直されます。'],

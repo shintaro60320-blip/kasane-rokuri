@@ -452,6 +452,32 @@ export function nudgeClip(p, clipId, delta) {
   return moveClip(p, clipId, { start: c.start + delta });
 }
 
+/** フレーズの中の音が、曲のどこから始まるか（枠の外に隠れた部分も含めた、録音の頭の位置） */
+export function contentStart(c) { return c.start - activeTake(c).offset; }
+
+/**
+ * 枠（始まりと終わり）はそのままで、中の音だけを delta 秒ずらす（ずれ合わせ用）。
+ * 曲の頭（0 秒）にあるフレーズも前へ合わせられ、隣のフレーズにもぶつからない。
+ * 隠れた音が足りなくてずらせないときは、フレーズごと動かす。
+ * audioSecOf(audioId) は録音の長さ（秒）を返す。
+ */
+export function slipClip(p, clipId, delta, audioSecOf) {
+  const c0 = p.clips.find((x) => x.id === clipId);
+  if (!c0 || !delta) return p;
+  const offs = c0.takes.map((t) => t.offset - delta);
+  if (offs.some((o) => o < -TOL)) return moveClip(p, clipId, { start: c0.start + delta });
+  const avail = Math.min(...c0.takes.map((t, i) => audioSecOf(t.audioId) - Math.max(0, offs[i])));
+  if (!(avail >= MIN_CLIP)) return moveClip(p, clipId, { start: c0.start + delta });
+  const q = clone(p);
+  const c = findClip(q, clipId);
+  c.takes.forEach((t, i) => { t.offset = Math.max(0, offs[i]); });
+  c.duration = Math.min(c.duration, avail);
+  if (c.keep) for (const k of c.keep) { if (k.kind === 'in') k.at += delta; else k.end += delta; }
+  pruneKeep(c);
+  syncOffset(c);
+  return q;
+}
+
 export function duplicateClip(p, clipId) {
   const q = clone(p);
   const c = findClip(q, clipId);
