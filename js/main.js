@@ -10,11 +10,11 @@ import { mixProject } from './mix.js';
 import { encodeWav16 } from './wav.js';
 import { packBackup, unpackBackup } from './backup.js';
 import {
-  openClipSheet, openTakesSheet, openMixerSheet, openTempoSheet, openSongsSheet, openMoreSheet, openFileSheet,
+  openClipSheet, openTakesSheet, openMixerSheet, openTrackListSheet, openSyncSheet, openTempoSheet, openSongsSheet, openMoreSheet, openFileSheet,
   closeSheet, currentSheet, refreshSheet, dialog, confirmDialog, promptDialog, toast, fmtTime,
 } from './ui-sheets.js';
 
-export const VERSION = 'v1.5.0';
+export const VERSION = 'v1.6.0';
 const MAX_REC_SEC = 600;
 const PENDING_FLUSH_MS = 2000;          // 録音中、断片を保存する間隔
 const WAIT_MSG = '保存が終わるまでお待ちください';
@@ -342,8 +342,9 @@ class App {
 
   loop() {
     const tick = () => {
-      const pos = this.currentPos();
-      if (this.engine.playing) this.timeline.setPlayhead(pos, true);
+      const scrub = this.timeline.scrubT;
+      const pos = scrub != null ? scrub : this.currentPos();
+      if (this.engine.playing && scrub == null) this.timeline.setPlayhead(pos, true);
       this.syncWakeLock();
       if (this.isRecording && this.recState) this.drawRecording();
       $('timeText').textContent = fmtTime(pos);
@@ -543,14 +544,26 @@ class App {
 
   goHome() {
     const p = this.project;
-    const target = p.loop.on && p.selection ? p.selection.start : 0;
+    let target = p.loop.on && p.selection ? p.selection.start : 0;
     if (this.isRecording) return;
+    // すでに範囲の始まりにいるなら、もう一度押すと曲の頭へ
+    if (target > 0 && Math.abs(this.currentPos() - target) < 0.3) target = 0;
     const was = this.engine.playing;
     if (was) this.engine.stop();
     this.playhead = target;
     this.timeline.setPlayhead(target);
     this.timeline.el.scrollLeft = Math.max(0, target * this.timeline.pps - 40);
     if (was) this.startPlay(target);
+    this.updateTransport();
+  }
+
+  /** 再生位置の三角を動かして離した所へ（範囲の選択はそのまま） */
+  seek(t) {
+    if (this.isRecording) return;
+    t = Math.max(0, t);
+    this.playhead = t;
+    this.timeline.setPlayhead(t);
+    if (this.engine.playing) { this.engine.stop(); this.startPlay(t); }
     this.updateTransport();
   }
 
@@ -604,16 +617,13 @@ class App {
         this.recTrackId = r.trackId;
         this.commit(r.project, { force: true });
       }
+      this.fixRecTrack();
       trackId = trackId || this.recTrackId || this.project.tracks[0].id;
       this.recTrackId = trackId;
       const p = this.project;
       // マイクを開いて実際の設定を取ってから、この録音の補正を決める（初回と2回目で変わらないように）
       await this.engine.openInput();
       const latencySec = this.engine.autoLatencySec() + this.settings.latencyMs / 1000;
-      if (!this.settings.overdubTipShown && p.clips.some((c) => c.trackId !== trackId)) {
-        toast('重ねた音のずれが気になったら、設定で合わせられます', { duration: 5000 });
-        this.setSetting('overdubTipShown', true);
-      }
       const countInSec = mode === 'normal' && p.metronomeOn ? (p.countInBars * p.beatsPerBar * 60) / p.bpm : 0;
       const recordStart = mode === 'normal' ? this.playhead : range.start;
       const peaks = new PeakBuilder();
@@ -774,6 +784,11 @@ class App {
       if (reason === 'limit') dialog({ title: '録音を止めました', message: '1回の録音は10分までです。ここまでの録音は保存しました。' });
       else if (reason === 'hidden') toast('画面を離れたので、録音を止めて保存しました');
       else if (res.mode === 'punch') toast(r.addedTake ? '新しいテイクを足しました' : '範囲を録り直しました', { action: { label: '取り消す', run: () => this.undo() } });
+      else if (sameProject && this.project.clips.some((c) => c.trackId !== res.trackId)) {
+        // 重ねて録ったとき：ずれていたら、その場で聞きながら合わせられるようにする
+        const id = r.clipId;
+        toast('重ねて録りました。ずれて聞こえたら合わせられます', { action: { label: 'ずれを合わせる', run: () => this.openSync(id) }, duration: 8000 });
+      }
       return r.clipId;
     } catch (e) {
       // 止める途中で問題が起きた：控えに残っている分は、次に開いたときに戻せる
@@ -1020,7 +1035,80 @@ class App {
     if (!t) return;
     const has = this.project.clips.some((c) => c.trackId === id);
     if (has && !(await confirmDialog('トラックを削除しますか', `「${t.name}」とその録音を削除します。取り消しで戻せます。`, '削除する', true))) return;
-    this.commit(M.removeTrack(this.project, id));
+    if (!this.commit(M.removeTrack(this.project, id))) return;
+    this.fixRecTrack();
+    this.render();
+    toast(`「${t.name}」を削除しました`, { action: { label: '取り消す', run: () => this.undo() } });
+  }
+
+  /** 録音先のトラックが無くなっていたら、残っている一番上のトラックにする */
+  fixRecTrack() {
+    const ts = this.project.tracks;
+    if (!ts.some((x) => x.id === this.recTrackId)) this.recTrackId = ts.length ? ts[0].id : null;
+  }
+
+  openTrackList() { if (this.session) { this.guardBusy(); return; } openTrackListSheet(this); }
+
+  // ---------- 重ねた音を合わせる ----------
+  openSync(clipId) { if (this.session) { this.guardBusy(); return; } openSyncSheet(this, clipId); }
+
+  beginSync(clipId) {
+    if (this.liveBase) this.commitLive();
+    this.syncState = { clipId, shift: 0, applyNext: true };
+  }
+
+  /** フレーズを d 秒動かして（取り消しにはまだ積まない）、少し前から流す */
+  syncNudge(d) {
+    const st = this.syncState;
+    if (!st || this.session) return;
+    const c = this.project.clips.find((x) => x.id === st.clipId);
+    if (!c) return;
+    const next = M.nudgeClip(this.project, st.clipId, d);
+    const moved = next.clips.find((x) => x.id === st.clipId);
+    st.shift += moved.start - c.start;
+    this.live(next);
+    this.render();
+    this.syncListen(true);
+  }
+
+  syncListen(restart = false) {
+    const st = this.syncState;
+    if (!st) return;
+    if (this.engine.playing && !restart) { this.stopPlay(); return; }
+    const c = this.project.clips.find((x) => x.id === st.clipId);
+    if (!c) return;
+    this.engine.stop();
+    const from = Math.max(0, c.start - 1.5);
+    this.playhead = from;
+    this.engine.ensure().then(() => this.startPlay(from)).catch((e) => toast(e.message || String(e), { error: true }));
+  }
+
+  /** ok=true：動かした位置で決める（次からの補正にも足す）／false：元の位置に戻す */
+  finishSync(ok) {
+    const st = this.syncState;
+    if (!st) { closeSheet(); return; }
+    if (this.engine.playing) this.stopPlay();
+    if (ok) {
+      this.commitLive();
+      if (st.applyNext && Math.abs(st.shift) > 1e-6) {
+        // 前へ動かした（shift がマイナス）分だけ、次の録音を前へ置く
+        this.setSetting('latencyMs', this.settings.latencyMs - st.shift * 1000);
+        const v = Math.round(this.settings.latencyMs);
+        toast(v === 0 ? '合わせました。次の録音からは、ずらさずに置きます' : `合わせました。次の録音から ${Math.abs(v)} ms ${v > 0 ? '前' : '後ろ'}へずらして置きます`, { duration: 5000 });
+      } else if (Math.abs(st.shift) > 1e-6) toast('合わせました');
+    } else {
+      this.cancelLive();
+    }
+    this.syncState = null;
+    closeSheet();
+  }
+
+  /** シートを閉じたとき：決めていなければ、動かした位置のまま確定する（次からの補正には足さない） */
+  endSync() {
+    if (!this.syncState) return;
+    this.syncState = null;
+    if (this.engine.playing) this.stopPlay();
+    this.commitLive();
   }
 
   // ---------- フレーズ ----------

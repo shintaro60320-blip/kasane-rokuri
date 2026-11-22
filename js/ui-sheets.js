@@ -262,6 +262,8 @@ export function openClipSheet(app, clipId) {
             button('+1ms', { cls: 'small grow', onClick: () => app.nudgeClip(clipId, 0.001) }),
             button('+10ms', { cls: 'small grow', onClick: () => app.nudgeClip(clipId, 0.01) }),
           ),
+          h('div', { class: 'row', style: { marginTop: '8px' } },
+            button('聞きながら合わせる', { onClick: () => openSyncSheet(app, clipId) })),
         ),
       );
       const sl = slider({
@@ -345,7 +347,7 @@ export function openMixerSheet(app) {
           pan.el,
           h('div', { class: 'pan-labels' }, h('span', { text: '左' }), h('span', { text: '右' })),
           h('div', { class: 'row', style: { justifyContent: 'space-between', marginTop: '4px' } }, sw,
-            h('button', { type: 'button', class: 'btn small danger', 'aria-label': `${t.name} を削除`, onClick: () => app.removeTrack(t.id) }, icon('trash'))),
+            button('トラックを削除', { ico: 'trash', cls: 'small danger', aria: `${t.name} を削除`, onClick: () => app.removeTrack(t.id) })),
         ));
       }
       const master = slider({
@@ -354,6 +356,83 @@ export function openMixerSheet(app) {
       });
       body.append(h('div', { class: 'group', style: { borderTop: '1px solid var(--line)', marginTop: '6px' } }, master.el,
         h('p', { class: 'note', text: 'M＝その音を消す、S＝その音だけ鳴らす。音量のつまみは2回押すと 100% に戻ります。' })));
+    },
+  });
+}
+
+/** トラックを消すシート（タイムラインの「トラックを消す」から開く） */
+export function openTrackListSheet(app) {
+  return openSheet({
+    id: 'tracks',
+    title: 'トラックを消す',
+    compact: true,
+    build(body) {
+      const p = app.project;
+      if (!p.tracks.length) { body.append(h('p', { class: 'note', text: 'トラックがありません。' })); return; }
+      body.append(h('p', { class: 'note', text: '消したいトラックの「削除」を押してください。間違えたときは、上の取り消し（左向きの矢印）で戻せます。' }));
+      const list = h('div', { class: 'list', style: { marginTop: '10px' } });
+      for (const t of p.tracks) {
+        const n = p.clips.filter((c) => c.trackId === t.id).length;
+        list.append(h('div', { class: 'list-item' },
+          h('span', { class: 'track-swatch', style: { background: t.color } }),
+          h('div', { class: 'main' }, h('div', { class: 'label', text: t.name }), h('div', { class: 'meta', text: n ? `フレーズ ${n} 個` : 'フレーズなし' })),
+          button('削除', { ico: 'trash', cls: 'small danger', aria: `${t.name} を削除`, onClick: () => app.removeTrack(t.id) }),
+        ));
+      }
+      body.append(list);
+    },
+  });
+}
+
+/**
+ * 重ねた音を合わせるシート。押すたびにフレーズを少し動かし、少し前から流して聞かせる。
+ * 動かした量は「次の録音から」の補正にも足せる（同じ端末・同じイヤホンなら、次からは合った位置に入る）。
+ */
+export function openSyncSheet(app, clipId) {
+  app.beginSync(clipId);
+  return openSheet({
+    id: 'sync:' + clipId,
+    title: '重ねた音を合わせる',
+    compact: true,
+    onClose: () => app.endSync(),
+    build(body, s) {
+      const st = app.syncState;
+      const c = app.project.clips.find((x) => x.id === clipId);
+      if (!st || !c) { body.append(h('p', { class: 'note', text: 'このフレーズはもうありません。' })); return; }
+      const ms = Math.round(st.shift * 1000);
+      const now = ms === 0 ? 'まだ動かしていません' : ms < 0 ? `${-ms} ms 前へ動かしました` : `${ms} ms 後ろへ動かしました`;
+      const step = (d) => button(d < 0 ? `前へ ${-d * 1000}` : `後ろへ ${d * 1000}`, { cls: 'small grow', onClick: () => { app.syncNudge(d); s.refresh(); } });
+      const listen = button(app.engine.playing ? '止める' : 'もう一度聞く', { ico: app.engine.playing ? 'stop' : 'play', onClick: () => { app.syncListen(); s.refresh(); } });
+      const apply = h('input', { type: 'checkbox', id: 'syncApply' });
+      apply.checked = st.applyNext;
+      apply.addEventListener('change', () => { st.applyNext = apply.checked; });
+      const result = h('p', { class: 'note', 'aria-live': 'polite' });
+      const measure = button('自動で測る', { onClick: async () => {
+        measure.disabled = true;
+        result.textContent = '測っています…（スピーカーから音が出ます）';
+        const r = await app.measureLatency();
+        measure.disabled = false;
+        result.textContent = r.ok ? `測れました。次の録音から ${Math.round(r.correctionMs)} ms で合わせます。` : r.reason;
+      } });
+      body.append(
+        h('div', { class: 'group' },
+          h('p', { class: 'note', text: '重ねた音が遅れて聞こえるなら「前へ」、早く聞こえるなら「後ろへ」を押します。押すたびに、少し前から流して聞かせます。数字の単位は ms（1000分の1秒）です。' }),
+          h('p', { class: 'sync-now', text: now }),
+          h('div', { class: 'row nowrap' }, step(-0.02), step(-0.005), step(0.005), step(0.02)),
+          h('div', { class: 'row', style: { marginTop: '10px' } }, listen),
+        ),
+        h('div', { class: 'group' },
+          h('label', { class: 'check-row', for: 'syncApply' }, apply, h('span', { text: '次からの録音も、同じだけ合わせる' })),
+          h('div', { class: 'row', style: { marginTop: '10px' } },
+            button('これで決める', { cls: 'primary grow', onClick: () => app.finishSync(true) }),
+            button('元に戻す', { cls: 'grow', onClick: () => app.finishSync(false) })),
+        ),
+        h('div', { class: 'group' },
+          h('h3', { text: '端末のずれを測る' }),
+          h('p', { class: 'note', text: 'イヤホンを外して、静かな所で押してください。スピーカーから短い音を鳴らしてマイクで拾い、次の録音からのずれを合わせます。Bluetooth のイヤホンは音が大きく遅れるので、線のあるイヤホンの方がずれません。' }),
+          h('div', { class: 'row' }, measure), result,
+        ),
+      );
     },
   });
 }
@@ -578,6 +657,9 @@ export function openHelpSheet() {
       const items = [
         ['録る', '赤い丸を押すと録音が始まります。もう一度押すと止まり、録った音が「フレーズ」として置かれます。保存は自動です。'],
         ['重ねる（ハモリ）', '「トラックを足す」を押してから赤い丸を押します。前の音を聞きながら録れます。イヤホンを付けると、前の音が録音に入りません。'],
+        ['重ねた音のずれを合わせる', '重ねて録ると「ずれを合わせる」が出ます。押すと、「前へ」「後ろへ」でフレーズを少しずつ動かしながら、少し前から聞けます。「これで決める」を押すと、次からの録音も同じだけ合わせて置きます。あとからでも、フレーズを押して「聞きながら合わせる」で開けます。'],
+        ['再生位置を動かす', '上の目盛りを押すと、そこへ飛びます。目盛りを横になぞると、時間を送れます。三角の印をつまんで動かすと、離した所へ行きます。左上の「はじめ」を押すと曲の頭に戻ります。'],
+        ['トラックを消す', 'トラックの下の「トラックを消す」を押して、消したいトラックの「削除」を押します。間違えたら取り消しで戻せます。'],
         ['一部分だけ録り直す', '上の目盛りを長押ししたまま横になぞると、範囲が選べます。その状態で赤い丸を押すと、範囲の少し前から再生が始まり、範囲の中だけが録り直されます。'],
         ['テイク', 'フレーズを押して「録り直す」を選ぶと、同じ位置にもう一度録れます。前の録音は「テイク」として残り、あとから選び直せます。'],
         ['切る', '下の「はさみ」を押してから、フレーズの切りたい所に指を置きます。左右に動かすと黄色い線が付いてきて、指を離した所で切れます。指を上下に大きく外して離すと、切らずにやめられます。2本指で広げると、細かい位置で切れます。'],

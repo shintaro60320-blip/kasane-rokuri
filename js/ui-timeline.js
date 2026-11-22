@@ -32,6 +32,7 @@ export class Timeline {
     this.clipEls = new Map();
     this.recEl = null;
     this.playheadT = 0;
+    this.scrubT = null; // 三角をつまんで動かしている間の位置
 
     el.addEventListener('pointerdown', (e) => this.onDown(e));
     el.addEventListener('pointermove', (e) => this.onMove(e));
@@ -76,7 +77,10 @@ export class Timeline {
 
     this.rulerCanvas = h('canvas', { 'aria-hidden': 'true' });
     this.rulerEl = h('div', { class: 'ruler', style: { width: `${this.contentW}px` }, 'aria-label': '時間の目盛り（押すと再生位置、長押ししてなぞると範囲を選べます）' }, this.rulerCanvas);
-    inner.append(h('div', { class: 'ruler-row' }, h('div', { class: 'corner', text: '' }), this.rulerEl));
+    // 左上の角：曲の頭に戻るボタン（目盛りの 0 は端にあって押しにくいので）
+    const homeBtn = h('button', { type: 'button', class: 'corner-home', 'aria-label': '曲の頭に戻る' }, h('span', { 'aria-hidden': 'true', class: 'ico', text: '⏮' }), 'はじめ');
+    homeBtn.addEventListener('click', () => app.goHome());
+    inner.append(h('div', { class: 'ruler-row' }, h('div', { class: 'corner' }, homeBtn), this.rulerEl));
 
     this.rowEls.clear();
     const oldClips = this.clipEls;
@@ -109,7 +113,9 @@ export class Timeline {
 
     const add = h('button', { type: 'button', class: 'add-track' }, h('span', { 'aria-hidden': 'true', style: { fontSize: '18px', lineHeight: '1' }, text: '＋' }), 'トラックを足す');
     add.addEventListener('click', () => app.addTrack());
-    inner.append(h('div', { class: 'add-row' }, h('div', { class: 'track-head' }, add)));
+    const del = p.tracks.length ? h('button', { type: 'button', class: 'add-track del-track' }, h('span', { 'aria-hidden': 'true', style: { fontSize: '18px', lineHeight: '1' }, text: '－' }), 'トラックを消す') : null;
+    if (del) del.addEventListener('click', () => app.openTrackList());
+    inner.append(h('div', { class: 'add-row' }, h('div', { class: 'track-head' }, add, del)));
     if (!p.clips.length && !app.isRecording) {
       inner.append(h('div', { class: 'empty-hint' },
         h('strong', { text: '赤い丸を押すと録音が始まります' }),
@@ -130,7 +136,7 @@ export class Timeline {
       this.placeSelHandles(p.selection);
       inner.append(sel);
     }
-    this.rulerHead = h('div', { class: 'ruler-head' });
+    this.rulerHead = h('div', { class: 'ruler-head', role: 'slider', 'aria-label': '再生位置（つまんで動かせます）' });
     this.rulerEl.append(this.rulerHead);
     this.playheadEl = h('div', { class: `playhead${app.isRecording ? ' rec' : ''}` });
     inner.append(this.playheadEl);
@@ -407,6 +413,14 @@ export class Timeline {
       e.preventDefault();
       return;
     }
+    if (t.closest('.ruler-head')) {
+      // 再生位置の三角：つまんだまま動かすと、離した所へ行く
+      this.g = { ...base, type: 'head', active: true };
+      this.scrubT = this.playheadT;
+      this.capture(e);
+      e.preventDefault();
+      return;
+    }
     const sh = t.closest('.sel-handle');
     if (sh) {
       this.g = { ...base, type: 'selEdge', side: sh.dataset.side, sel: { ...this.app.project.selection }, active: true };
@@ -494,6 +508,13 @@ export class Timeline {
     g.line.firstChild.textContent = g.ok ? fmtTime(t, 2) : 'やめる';
   }
 
+  /** 目盛りの左端（曲の頭）の近くなら 0 にする。端は指で狙いにくいので */
+  snapHome(t, clientX) {
+    const r = this.el.getBoundingClientRect();
+    const x0 = r.left + this.head - this.el.scrollLeft; // 0 秒の画面上の位置
+    return clientX - x0 < 24 ? 0 : t;
+  }
+
   autoscroll(x) {
     const r = this.el.getBoundingClientRect();
     if (x > r.right - 32) this.el.scrollLeft += 10;
@@ -510,6 +531,12 @@ export class Timeline {
     e.preventDefault();
     this.autoscroll(e.clientX);
     if (g.type === 'cut') { this.placeCut(e); return; }
+    if (g.type === 'head') {
+      const t = this.snapHome(this.timeAt(e.clientX), e.clientX);
+      this.scrubT = t;
+      this.setPlayhead(t);
+      return;
+    }
     const dx = (e.clientX - g.x0 + (this.el.scrollLeft - g.sl0)) / this.pps;
     const p = this.app.project;
     const snap = (t) => (p.snap ? snapToBeat(t, p.bpm) : t);
@@ -562,8 +589,15 @@ export class Timeline {
     if (!g.active) {
       if (g.type === 'clip') this.app.tapClip(g.clipId);
       else if (g.type === 'ruler' || g.type === 'lane') {
-        this.app.tapTime(this.timeAt(e.clientX), g.type === 'lane');
+        const t = this.timeAt(e.clientX);
+        this.app.tapTime(g.type === 'ruler' ? this.snapHome(t, e.clientX) : t, g.type === 'lane');
       }
+      return;
+    }
+    if (g.type === 'head') {
+      const t = this.scrubT;
+      this.scrubT = null;
+      this.app.seek(t == null ? this.playheadT : t);
       return;
     }
     if (g.type === 'cut') {
@@ -588,6 +622,7 @@ export class Timeline {
     if (!g) return;
     clearTimeout(g.timer);
     this.g = null;
+    if (g.type === 'head') { const t = this.scrubT; this.scrubT = null; this.app.seek(t == null ? this.playheadT : t); return; }
     if (g.active) {
       if (g.type === 'range' || g.type === 'selEdge') this.app.commitSelection();
       else this.render();

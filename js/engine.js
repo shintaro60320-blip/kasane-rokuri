@@ -244,6 +244,8 @@ export class Engine {
     const s = this.session;
     if (!s || !this.ctx) return null;
     const t = this.ctx.currentTime;
+    // 鳴り始める前（予約の待ち時間）は、始まりの位置のまま（0 へ跳んだように見えないように）
+    if (s.passes && s.passes.length && t < s.passes[0].ctx) return s.passes[0].song;
     const p = this._passAt(s, t);
     return p.song + (t - p.ctx);
   }

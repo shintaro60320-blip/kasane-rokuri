@@ -140,6 +140,22 @@ svg { display: block; }
   color: var(--dim);
   font-size: 11px;
 }
+.corner-home {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.corner-home .ico { font-size: 14px; }
+.corner-home:active { background: var(--panel-2); }
 .ruler { flex: none; position: relative; height: 100%; cursor: pointer; }
 .ruler canvas { position: sticky; left: var(--head); display: block; height: 100%; }
 
@@ -280,6 +296,12 @@ svg { display: block; }
   cursor: pointer;
 }
 .add-track svg { width: 18px; height: 18px; }
+.add-row .track-head { gap: 8px; }
+.del-track { color: var(--dim); }
+.track-swatch { flex: none; width: 12px; height: 12px; border-radius: 50%; }
+.sync-now { margin: 8px 0; font-weight: 700; }
+.check-row { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.check-row input { width: 22px; height: 22px; }
 
 .selection {
   position: absolute;
@@ -311,19 +333,29 @@ svg { display: block; }
   border-radius: 4px;
   background: var(--accent);
 }
+/* 再生位置の三角。見た目より広い所（幅44px・目盛りの高さ）でつまめる */
 .ruler-head {
   position: absolute;
-  left: -6px;
-  bottom: 0;
-  width: 0;
-  height: 0;
-  border: 6px solid transparent;
-  border-top: 9px solid var(--text);
-  border-bottom: 0;
-  pointer-events: none;
+  left: -22px;
+  top: 0;
+  width: 44px;
+  height: 100%;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: ew-resize;
   z-index: 3;
 }
-.ruler-head.rec { border-top-color: var(--rec); }
+.ruler-head::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  margin-left: -9px;
+  border: 9px solid transparent;
+  border-top: 14px solid var(--text);
+  border-bottom: 0;
+}
+.ruler-head.rec::after { border-top-color: var(--rec); }
 
 .playhead {
   position: absolute;
