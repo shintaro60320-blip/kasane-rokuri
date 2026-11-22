@@ -28,6 +28,8 @@ export function h(tag, props = {}, ...children) {
 // アイコン（決まった文字列だけ。利用者の文字は入らない）
 const ICONS = {
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  chevDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
+  chevUp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>',
   split: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v18"/><path d="M8 8 4 12l4 4M16 8l4 4-4 4"/></svg>',
   copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
@@ -118,6 +120,8 @@ const panText = (v) => (Math.abs(v) < 0.005 ? '中央' : v < 0 ? `左 ${Math.rou
 // ---- シートの土台 ----
 
 let current = null;
+// たたんだ状態は、同じ種類のシート（例：フレーズ）を次に開いたときも引き継ぐ。別のフレーズを押しても、たたんだまま作業を続けられる
+const foldedKinds = new Set();
 
 /**
  * シートを開く。build(body, sheet) で中身を作る。modal=false なら後ろの画面も触れる（ミキサー・フレーズ用）。
@@ -128,8 +132,24 @@ export function openSheet({ id, title, build, modal = false, compact = false, on
   const body = h('div', { class: 'sheet-body' });
   const titleEl = h('h2', { text: title });
   const closeBtn = h('button', { type: 'button', class: 'icon-btn', 'aria-label': '閉じる' }, icon('close'));
+  // 後ろを触れるシートは、たたんで見出しだけにできる（フレーズの端を引くときなどに邪魔にならないように）
+  const foldBtn = modal ? null : h('button', { type: 'button', class: 'fold-btn' });
   const sheet = h('section', { class: `sheet enter${compact ? ' compact' : ''}`, role: 'dialog', 'aria-label': title },
-    h('div', { class: 'sheet-head' }, titleEl, closeBtn), body);
+    h('div', { class: 'sheet-head' }, titleEl, foldBtn, closeBtn), body);
+  const kind = String(id || '').split(':')[0];
+  let folded = foldedKinds.has(kind);
+  const setFold = (on) => {
+    folded = on;
+    if (on) foldedKinds.add(kind); else foldedKinds.delete(kind);
+    sheet.classList.toggle('folded', on);
+    foldBtn.replaceChildren(icon(on ? 'chevUp' : 'chevDown'), on ? 'ひらく' : 'たたむ');
+    foldBtn.setAttribute('aria-expanded', String(!on));
+  };
+  if (foldBtn) {
+    setFold(folded);
+    foldBtn.addEventListener('click', () => setFold(!folded));
+    titleEl.addEventListener('click', () => { if (folded) setFold(false); });
+  }
   const backdrop = modal ? h('div', { class: 'sheet-backdrop' }) : null;
   const s = {
     id, sheet, body, backdrop, onClose, build,
@@ -664,6 +684,7 @@ export function openHelpSheet() {
         ['テイク', 'フレーズを押して「録り直す」を選ぶと、同じ位置にもう一度録れます。前の録音は「テイク」として残り、あとから選び直せます。'],
         ['切る', '下の「はさみ」を押してから、フレーズの切りたい所に指を置きます。左右に動かすと黄色い線が付いてきて、指を離した所で切れます。指を上下に大きく外して離すと、切らずにやめられます。2本指で広げると、細かい位置で切れます。'],
         ['フレーズを動かす', 'フレーズを長押しして、そのまま動かします。左右で時間、上下で別のトラックに移せます。'],
+        ['端を縮める', 'フレーズを押すと、両端に白いつまみが出ます。引くと、波形はそのままで端から切り取られます。下に出たメニューが邪魔なときは、右上の「たたむ」で小さくできます。'],
         ['音量', '下の「ミキサー」で、トラックごとの音量・左右の位置・ミュート（M）・ソロ（S）を変えられます。'],
         ['取り消し', '上の矢印で、直前の操作を取り消せます（50回まで）。'],
         ['書き出し', '右上の「…」→「一曲に書き出す」で、WAV ファイルにして保存や共有ができます。'],

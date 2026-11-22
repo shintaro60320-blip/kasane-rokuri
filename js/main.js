@@ -14,7 +14,7 @@ import {
   closeSheet, currentSheet, refreshSheet, dialog, confirmDialog, promptDialog, toast, fmtTime,
 } from './ui-sheets.js';
 
-export const VERSION = 'v1.6.0';
+export const VERSION = 'v1.7.0';
 const MAX_REC_SEC = 600;
 const PENDING_FLUSH_MS = 2000;          // 録音中、断片を保存する間隔
 const WAIT_MSG = '保存が終わるまでお待ちください';

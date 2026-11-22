@@ -164,7 +164,11 @@ export class Timeline {
       role: 'button',
       'aria-label': `フレーズ ${c.start.toFixed(1)} 秒から ${c.duration.toFixed(1)} 秒`,
     });
-    el.append(this.waveCanvas(c, track, quiet, w, used));
+    // 波形は枠（.wave）の中に置く。端を縮めるときは波形の縮尺を変えずに、枠で切り取って見せる
+    const cv = this.waveCanvas(c, track, quiet, w, used);
+    cv.style.left = '';
+    cv.style.width = '';
+    el.append(h('div', { class: 'wave' }, cv));
     if (c.takes.length > 1) {
       const badge = h('button', { type: 'button', class: 'take-badge', dataset: { takes: c.id }, 'aria-label': `テイク ${c.activeTake + 1}/${c.takes.length}（押すと一覧）` },
         h('span', { text: w >= 84 ? `テイク ${c.activeTake + 1}/${c.takes.length}` : `${c.activeTake + 1}/${c.takes.length}` }));
@@ -409,6 +413,9 @@ export class Timeline {
       const c = this.app.project.clips.find((x) => x.id === clipEl.dataset.clip);
       if (!c) return;
       this.g = { ...base, type: 'trim', side: handle.dataset.side, clip: structuredClone(c), el: clipEl, active: true };
+      // 引いている間、波形は元の幅のまま止めておく（縮めても音が速くなったように見えないように）
+      const cv = clipEl.querySelector('.wave canvas');
+      if (cv) { cv.style.width = `${clipEl.clientWidth}px`; cv.style.left = '0px'; this.g.cv = cv; }
       this.capture(e);
       e.preventDefault();
       return;
@@ -563,6 +570,7 @@ export class Timeline {
         ns = Math.min(ns, clipEnd(c) - MIN_CLIP);
         g.value = ns;
         g.el.style.left = `${ns * this.pps}px`;
+        if (g.cv) g.cv.style.left = `${(c.start - ns) * this.pps}px`;
         g.el.style.width = `${(clipEnd(c) - ns) * this.pps}px`;
       } else {
         const audio = this.app.audios.get(activeTake(c).audioId);
